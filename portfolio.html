@@ -387,6 +387,7 @@ async function fetchFX() {
     if (price) {
       fx = price;
       document.getElementById('fx-badge').textContent = 'USD/KRW ' + fx.toFixed(1);
+      render(); // 환율 로드 후 재렌더
     }
   } catch(e) {
     document.getElementById('fx-badge').textContent = 'USD/KRW 조회실패';
