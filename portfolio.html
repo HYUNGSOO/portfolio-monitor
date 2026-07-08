@@ -337,7 +337,15 @@ async function fetchQuote(ticker) {
     fiftyTwoWeekHigh: meta.fiftyTwoWeekHigh,
     fiftyTwoWeekLow: meta.fiftyTwoWeekLow,
     sharesOutstanding: meta.sharesOutstanding,
+    currency: meta.currency || 'USD',
   };
+}
+
+// 종목 가격을 USD로 환산
+function priceToUSD(price, currency) {
+  if (!price) return null;
+  if (currency === 'KRW' && fx) return price / fx;
+  return price;
 }
 
 // currency helpers — all values stored internally as USD
@@ -424,8 +432,11 @@ async function fetchMarket() {
         const res=hist[i].value?.chart?.result?.[0];
         ts=res?.timestamp||[]; closes=res?.indicators?.quote?.[0]?.close||[];
       }
+      const currency = q.currency || 'USD';
+      const priceUSD = priceToUSD(q.regularMarketPrice, currency);
       return {
-        ticker, price:q.regularMarketPrice, d1:q.regularMarketChangePercent,
+        ticker, price:q.regularMarketPrice, priceUSD, currency,
+        d1:q.regularMarketChangePercent,
         d5:calcPctDays(closes,5), m1:calcPctDate(ts,closes,monthsAgo(1)),
         m3:calcPctDate(ts,closes,monthsAgo(3)), m6:calcPctDate(ts,closes,monthsAgo(6)),
         y1:calcPctDate(ts,closes,yearsAgo(1)),
@@ -452,7 +463,10 @@ async function fetchPortfolioPrices(pfId) {
     quoteResults.forEach((r, i) => {
       if (r.status === 'fulfilled') {
         const h = pf.holdings.find(x=>x.ticker===tickers[i]);
-        if(h) h.price = r.value.regularMarketPrice;
+        if(h) {
+          h.price = r.value.regularMarketPrice;
+          h.priceCurrency = r.value.currency || 'USD';
+        }
       }
     });
     pf.lastUpdate = new Date().toLocaleString('ko-KR',{timeZone:'Asia/Seoul',hour12:false});
@@ -530,7 +544,12 @@ function marketPageHTML() {
     const hiPct = (r.hi52&&r.price)?(r.price/r.hi52-1)*100:null;
     return `<tr>
       <td><span class="ticker-name">${r.ticker} US</span></td>
-      <td class="price-val">${r.price?r.price.toFixed(2):'<span class="neu">N/A</span>'}</td>
+      <td class="price-val">${r.price
+        ? (r.currency==='KRW'
+            ? '₩'+r.price.toLocaleString('ko-KR',{maximumFractionDigits:0})
+              + (fx ? '<span class="sub-amt">$'+(r.price/fx).toFixed(2)+'</span>' : '')
+            : '$'+r.price.toFixed(2))
+        : '<span class="neu">N/A</span>'}</td>
       <td>${pctCell(r.d1)}</td><td>${pctCell(r.d5)}</td><td>${pctCell(r.m1)}</td>
       <td>${pctCell(r.m3)}</td><td>${pctCell(r.m6)}</td><td>${pctCell(r.y1)}</td>
       <td>${r.lo52&&r.hi52?`${r.lo52.toFixed(2)} / ${r.hi52.toFixed(2)} <span class="neg" style="font-size:10px;">(${hiPct.toFixed(1)}%)</span>`:'<span class="neu">N/A</span>'}</td>
@@ -593,12 +612,18 @@ function portfolioPageHTML(pf) {
   const tgtSum = [...pf.holdings,...pf.cash,...pf.other].reduce((s,x)=>s+(x.tgt||0),0);
 
   const holdingsRows = pf.holdings.map((h,i)=>{
-    const val=(h.price||0)*(h.shares||0);
+    const rawVal=(h.price||0)*(h.shares||0);
+    const val = (h.priceCurrency==='KRW' && fx) ? rawVal/fx : rawVal;
     const curPct=total?val/total*100:0;
     const diff=curPct-(h.tgt||0), dc=Math.abs(diff)<0.5?'neu':diff>0?'pos':'neg';
     return `<tr>
       <td><span class="ticker-name">${esc(h.ticker)} US</span></td>
-      <td class="price-val">${h.price?'$'+h.price.toFixed(2):'<span class="neu">—</span>'}</td>
+      <td class="price-val">${h.price
+        ? (h.priceCurrency==='KRW'
+            ? '₩'+h.price.toLocaleString('ko-KR',{maximumFractionDigits:0})
+              + (fx ? '<span class="sub-amt">$'+(h.price/fx).toFixed(2)+'</span>' : '')
+            : '$'+h.price.toFixed(2))
+        : '<span class="neu">—</span>'}</td>
       <td><input class="inline" type="number" value="${h.shares||''}" min="0" step="0.001" placeholder="0"
           onchange="updateItem('${pf.id}','holdings',${i},'shares',this.value)"></td>
       <td>${dispMoneyBoth(val)}</td>
