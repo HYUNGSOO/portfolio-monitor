@@ -480,10 +480,14 @@ function itemUSD(item) {
   // cash/other items have {amount, currency}
   return toUSD(item.amount||0, item.currency||'USD');
 }
+function holdingUSD(h) {
+  const raw = (h.price||0) * (h.shares||0);
+  return (h.priceCurrency==='KRW' && fx) ? raw/fx : raw;
+}
 function pfTotals(pf) {
-  const eqVal = pf.holdings.reduce((s,h)=>s+(h.price||0)*(h.shares||0),0);
-  const cashVal = pf.cash.reduce((s,c)=>s+itemUSD(c),0);
-  const otherVal = pf.other.reduce((s,o)=>s+itemUSD(o),0);
+  const eqVal   = pf.holdings.reduce((s,h)=>s+holdingUSD(h), 0);
+  const cashVal  = pf.cash.reduce((s,c)=>s+itemUSD(c), 0);
+  const otherVal = pf.other.reduce((s,o)=>s+itemUSD(o), 0);
   return { eqVal, cashVal, otherVal, total: eqVal+cashVal+otherVal };
 }
 
@@ -612,8 +616,7 @@ function portfolioPageHTML(pf) {
   const tgtSum = [...pf.holdings,...pf.cash,...pf.other].reduce((s,x)=>s+(x.tgt||0),0);
 
   const holdingsRows = pf.holdings.map((h,i)=>{
-    const rawVal=(h.price||0)*(h.shares||0);
-    const val = (h.priceCurrency==='KRW' && fx) ? rawVal/fx : rawVal;
+    const val = holdingUSD(h);
     const curPct=total?val/total*100:0;
     const diff=curPct-(h.tgt||0), dc=Math.abs(diff)<0.5?'neu':diff>0?'pos':'neg';
     return `<tr>
