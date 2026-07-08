@@ -615,21 +615,69 @@ function portfolioPageHTML(pf) {
   const { eqVal, cashVal, otherVal, total } = pfTotals(pf);
   const tgtSum = [...pf.holdings,...pf.cash,...pf.other].reduce((s,x)=>s+(x.tgt||0),0);
 
+  // 총 수익 계산
+  let totalPL = null, totalCost = 0, totalPLPct = null;
+  pf.holdings.forEach(h => {
+    if (h.avgCost && h.price && h.shares) {
+      const plRaw = (h.price - h.avgCost) * h.shares;
+      const plUSD = (h.priceCurrency==='KRW' && fx) ? plRaw/fx : plRaw;
+      const costRaw = h.avgCost * h.shares;
+      const costUSD = (h.priceCurrency==='KRW' && fx) ? costRaw/fx : costRaw;
+      totalPL = (totalPL||0) + plUSD;
+      totalCost += costUSD;
+    }
+  });
+  totalPLPct = (totalPL!==null && totalCost>0) ? (totalPL/totalCost)*100 : null;
+
   const holdingsRows = pf.holdings.map((h,i)=>{
     const val = holdingUSD(h);
     const curPct=total?val/total*100:0;
     const diff=curPct-(h.tgt||0), dc=Math.abs(diff)<0.5?'neu':diff>0?'pos':'neg';
+
+    // 수익/손실 계산 (평균단가 기준, 같은 통화)
+    const avgCost = h.avgCost || null;
+    let plPct = null, plAmt = null;
+    if (avgCost && h.price && h.shares) {
+      plPct = (h.price / avgCost - 1) * 100;
+      const plRaw = (h.price - avgCost) * h.shares;
+      plAmt = (h.priceCurrency==='KRW' && fx) ? plRaw/fx : plRaw;
+    }
+
+    const priceDisp = h.price
+      ? (h.priceCurrency==='KRW'
+          ? '₩'+h.price.toLocaleString('ko-KR',{maximumFractionDigits:0})
+            + (fx ? '<span class="sub-amt">$'+(h.price/fx).toFixed(2)+'</span>' : '')
+          : '$'+h.price.toFixed(2))
+      : '<span class="neu">—</span>';
+
+    const avgDisp = avgCost
+      ? (h.priceCurrency==='KRW'
+          ? '₩'+avgCost.toLocaleString('ko-KR',{maximumFractionDigits:0})
+          : '$'+avgCost.toFixed(2))
+      : '<span class="neu">—</span>';
+
+    const plPctDisp = plPct!==null
+      ? `<span class="${plPct>=0?'pos':'neg'}">${plPct>=0?'+':''}${plPct.toFixed(2)}%</span>`
+      : '<span class="neu">—</span>';
+
+    const plAmtDisp = plAmt!==null
+      ? `<span class="${plAmt>=0?'pos':'neg'}">${plAmt>=0?'+':''}${dispMoney(plAmt)}</span>`
+      : '<span class="neu">—</span>';
+
     return `<tr>
-      <td><span class="ticker-name">${esc(h.ticker)} US</span></td>
-      <td class="price-val">${h.price
-        ? (h.priceCurrency==='KRW'
-            ? '₩'+h.price.toLocaleString('ko-KR',{maximumFractionDigits:0})
-              + (fx ? '<span class="sub-amt">$'+(h.price/fx).toFixed(2)+'</span>' : '')
-            : '$'+h.price.toFixed(2))
-        : '<span class="neu">—</span>'}</td>
+      <td><span class="ticker-name">${esc(h.ticker)}</span></td>
+      <td class="price-val">${priceDisp}</td>
+      <td>
+        <input class="inline" type="number" value="${h.avgCost||''}" min="0" step="0.01" placeholder="단가"
+          onchange="updateItem('${pf.id}','holdings',${i},'avgCost',this.value)"
+          style="width:80px;">
+        <span style="font-size:9px;color:var(--muted);">${h.priceCurrency==='KRW'?'₩':'$'}</span>
+      </td>
       <td><input class="inline" type="number" value="${h.shares||''}" min="0" step="0.001" placeholder="0"
           onchange="updateItem('${pf.id}','holdings',${i},'shares',this.value)"></td>
       <td>${dispMoneyBoth(val)}</td>
+      <td>${plPctDisp}</td>
+      <td>${plAmtDisp}</td>
       <td class="${dc}">${curPct.toFixed(1)}%</td>
       <td><input class="inline" type="number" value="${h.tgt!=null?h.tgt:''}" min="0" max="100" step="0.1" placeholder="0"
           onchange="updateItem('${pf.id}','holdings',${i},'tgt',this.value)"> %</td>
@@ -710,6 +758,9 @@ function portfolioPageHTML(pf) {
     <div class="summary-card"><div class="summary-label">목표비중 합계</div>
       <div class="summary-value" style="color:${Math.abs(tgtSum-100)<0.5?'var(--green)':'var(--orange)'};">${tgtSum.toFixed(1)}%</div>
       <div class="summary-sub">${Math.abs(tgtSum-100)<0.5?'균형':'100% 필요'}</div></div>
+    <div class="summary-card"><div class="summary-label">총 수익 (평가)</div>
+      <div class="summary-value" style="color:${totalPL>=0?'var(--green)':'var(--red)'};">${totalPL!==null?(totalPL>=0?'+':'')+dispMoney(totalPL):'—'}</div>
+      <div class="summary-sub" style="color:${totalPLPct>=0?'var(--green)':'var(--red)'};">${totalPLPct!==null?(totalPLPct>=0?'+':'')+totalPLPct.toFixed(2)+'%':'평균단가 미입력'}</div></div>
   </div>
 
   <div class="section">
