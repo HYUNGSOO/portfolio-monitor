@@ -166,7 +166,7 @@
 </footer>
 
 <script>
-const PROXY = 'https://stock-proxy.yhungs66.workers.dev/?url=';
+const PROXY = 'https://stock-proxy.yhyungs66.workers.dev/?url=';
 const LS_KEY = 'pf-monitor-v3';
 const LS_GIST = 'pf-gist-cfg';
 const GIST_FILE = 'portfolio-monitor.json';
@@ -322,6 +322,24 @@ async function sf(url) {
   return r.json();
 }
 
+async function fetchQuote(ticker) {
+  // Use v8 chart API (1d range) to get current price + meta info
+  const d = await sf(`https://query1.finance.yahoo.com/v8/finance/chart/${ticker}?interval=1d&range=1d&includePrePost=false`);
+  const res = d?.chart?.result?.[0];
+  if (!res) return {};
+  const meta = res.meta || {};
+  return {
+    symbol: ticker,
+    regularMarketPrice: meta.regularMarketPrice,
+    regularMarketChangePercent: meta.regularMarketPrice && meta.chartPreviousClose
+      ? (meta.regularMarketPrice / meta.chartPreviousClose - 1) * 100 : null,
+    marketCap: meta.marketCap,
+    fiftyTwoWeekHigh: meta.fiftyTwoWeekHigh,
+    fiftyTwoWeekLow: meta.fiftyTwoWeekLow,
+    sharesOutstanding: meta.sharesOutstanding,
+  };
+}
+
 // currency helpers — all values stored internally as USD
 function toUSD(amount, currency) {
   if (currency === 'KRW') return fx ? amount / fx : 0;
@@ -395,13 +413,12 @@ async function fetchMarket() {
   if (!tickers.length) return;
   showLoader(true);
   try {
-    const qd = await sf(`https://query1.finance.yahoo.com/v7/finance/quote?symbols=${tickers.join(',')}&fields=regularMarketPrice,regularMarketChangePercent,marketCap,sharesOutstanding,fiftyTwoWeekHigh,fiftyTwoWeekLow`);
-    const quotes = qd?.quoteResponse?.result || [];
-    const hist = await Promise.allSettled(
-      tickers.map(t => sf(`https://query1.finance.yahoo.com/v8/finance/chart/${t}?interval=1d&range=2y`))
-    );
+    const [quoteResults, hist] = await Promise.all([
+      Promise.allSettled(tickers.map(t => fetchQuote(t))),
+      Promise.allSettled(tickers.map(t => sf(`https://query1.finance.yahoo.com/v8/finance/chart/${t}?interval=1d&range=2y`)))
+    ]);
     app.marketData = tickers.map((ticker,i) => {
-      const q = quotes.find(x=>x.symbol===ticker)||{};
+      const q = quoteResults[i].status==='fulfilled' ? quoteResults[i].value : {};
       let ts=[],closes=[];
       if(hist[i].status==='fulfilled'){
         const res=hist[i].value?.chart?.result?.[0];
@@ -431,10 +448,12 @@ async function fetchPortfolioPrices(pfId) {
   if (!tickers.length) { render(); return; }
   showLoader(true);
   try {
-    const d = await sf(`https://query1.finance.yahoo.com/v7/finance/quote?symbols=${tickers.join(',')}&fields=regularMarketPrice`);
-    (d?.quoteResponse?.result||[]).forEach(q=>{
-      const h = pf.holdings.find(x=>x.ticker===q.symbol);
-      if(h) h.price = q.regularMarketPrice;
+    const quoteResults = await Promise.allSettled(tickers.map(t => fetchQuote(t)));
+    quoteResults.forEach((r, i) => {
+      if (r.status === 'fulfilled') {
+        const h = pf.holdings.find(x=>x.ticker===tickers[i]);
+        if(h) h.price = r.value.regularMarketPrice;
+      }
     });
     pf.lastUpdate = new Date().toLocaleString('ko-KR',{timeZone:'Asia/Seoul',hour12:false});
     saveApp();
