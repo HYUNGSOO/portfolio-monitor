@@ -843,10 +843,24 @@ function removeItem(pfId,list,i){ getPf(pfId)[list].splice(i,1); saveApp(); rend
 (async function init(){
   loadLocal();
   updateSyncBadge();
-  await pullGist();     // cloud first if connected
+  await pullGist();
   render();
-  fetchFX();
-  if (app.activeTab==='market' && !app.marketData.length) fetchMarket();
+  await fetchFX();
+
+  // 페이지 열 때 자동 시세 조회
+  fetchMarket();
+  app.portfolios.forEach(pf => {
+    if (pf.holdings.length) fetchPortfolioPrices(pf.id);
+  });
+
+  // 5분마다 자동 갱신
+  setInterval(async () => {
+    await fetchFX();
+    fetchMarket();
+    app.portfolios.forEach(pf => {
+      if (pf.holdings.length) fetchPortfolioPrices(pf.id);
+    });
+  }, 1 * 60 * 1000);
 })();
 </script>
 </body>
