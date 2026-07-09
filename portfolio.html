@@ -338,6 +338,7 @@ async function fetchQuote(ticker) {
     fiftyTwoWeekLow: meta.fiftyTwoWeekLow,
     sharesOutstanding: meta.sharesOutstanding,
     currency: meta.currency || 'USD',
+    name: meta.shortName || meta.longName || ticker,
   };
 }
 
@@ -437,6 +438,7 @@ async function fetchMarket() {
       const priceUSD = priceToUSD(q.regularMarketPrice, currency);
       return {
         ticker, price:q.regularMarketPrice, priceUSD, currency,
+        name: q.name || ticker,
         d1:q.regularMarketChangePercent,
         d5:calcPctDays(closes,5), m1:calcPctDate(ts,closes,monthsAgo(1)),
         m3:calcPctDate(ts,closes,monthsAgo(3)), m6:calcPctDate(ts,closes,monthsAgo(6)),
@@ -467,6 +469,7 @@ async function fetchPortfolioPrices(pfId) {
         if(h) {
           h.price = r.value.regularMarketPrice;
           h.priceCurrency = r.value.currency || 'USD';
+          if (r.value.name && r.value.name !== tickers[i]) h.name = r.value.name;
         }
       }
     });
@@ -548,7 +551,10 @@ function marketPageHTML() {
   const rows = app.marketData.map(r=>{
     const hiPct = (r.hi52&&r.price)?(r.price/r.hi52-1)*100:null;
     return `<tr>
-      <td><span class="ticker-name">${r.ticker} US</span></td>
+      <td>
+        <span class="ticker-name">${r.ticker}</span>
+        ${r.name && r.name!==r.ticker ? `<span class="sub-amt">${r.name}</span>` : ''}
+      </td>
       <td class="price-val">${r.price
         ? (r.currency==='KRW'
             ? '₩'+r.price.toLocaleString('ko-KR',{maximumFractionDigits:0})
@@ -666,7 +672,14 @@ function portfolioPageHTML(pf) {
       : '<span class="neu">—</span>';
 
     return `<tr>
-      <td><span class="ticker-name">${esc(h.ticker)}</span></td>
+      <td>
+        <span class="ticker-name">${esc(h.ticker)}</span>
+        ${h.name ? `<span class="sub-amt">${esc(h.name)}</span>` : ''}
+        <br>
+        <input class="inline" type="text" value="${esc(h.sector||'')}" placeholder="섹터/테마"
+          style="width:90px;font-size:10px;color:var(--muted);"
+          onchange="updateItemStr('${pf.id}','holdings',${i},'sector',this.value)">
+      </td>
       <td class="price-val">${priceDisp}</td>
       <td>
         <input class="inline" type="number" value="${h.avgCost||''}" min="0" step="0.01" placeholder="단가"
@@ -767,7 +780,7 @@ function portfolioPageHTML(pf) {
   <div class="section">
     <div class="section-header"><span class="section-title">EQUITY HOLDINGS</span></div>
     <div class="table-wrap"><table><thead><tr>
-      <th>TICKER</th><th>현재가</th><th>평균단가</th><th>보유수량</th><th>평가금액</th>
+      <th>TICKER / 섹터</th><th>현재가</th><th>평균단가</th><th>보유수량</th><th>평가금액</th>
       <th>수익률</th><th>수익금액</th><th>현재비중</th><th>목표비중</th><th style="min-width:150px;">비중 현황</th><th>리밸런싱</th><th></th>
     </tr></thead><tbody>${holdingsRows}</tbody></table></div>
     <div class="add-row">
@@ -805,6 +818,54 @@ function portfolioPageHTML(pf) {
       <select id="no-c-${pf.id}"><option value="USD">USD</option><option value="KRW">KRW</option></select>
       <input type="number" id="no-g-${pf.id}" placeholder="목표비중 %" style="max-width:110px;" min="0" max="100" step="0.1">
       <button class="btn btn-ghost btn-sm" onclick="addOther('${pf.id}')">+ 자산 추가</button>
+    </div>
+  </div>
+
+  ${sectorHTML(pf, total)}
+  `;
+}
+
+function sectorHTML(pf, total) {
+  // 섹터별 집계
+  const sectorMap = {};
+  pf.holdings.forEach(h => {
+    const sector = h.sector || '미분류';
+    const val = holdingUSD(h);
+    if (!sectorMap[sector]) sectorMap[sector] = 0;
+    sectorMap[sector] += val;
+  });
+
+  const sectors = Object.entries(sectorMap).sort((a,b) => b[1]-a[1]);
+  if (!sectors.length) return '';
+
+  const rows = sectors.map(([sector, val]) => {
+    const pct = total ? val/total*100 : 0;
+    return `<tr>
+      <td style="color:var(--text);padding:8px 12px;border-bottom:1px solid var(--border);">${esc(sector)}</td>
+      <td style="text-align:right;padding:8px 12px;border-bottom:1px solid var(--border);font-family:var(--mono);">${dispMoney(val)}</td>
+      <td style="text-align:right;padding:8px 12px;border-bottom:1px solid var(--border);">
+        <div style="display:flex;align-items:center;gap:8px;justify-content:flex-end;">
+          <span style="font-family:var(--mono);font-size:12px;color:var(--blue);">${pct.toFixed(1)}%</span>
+          <div style="width:80px;height:5px;background:#1a2535;border-radius:2px;overflow:hidden;">
+            <div style="width:${Math.min(pct,100)}%;height:100%;background:var(--blue);border-radius:2px;"></div>
+          </div>
+        </div>
+      </td>
+    </tr>`;
+  }).join('');
+
+  return `
+  <div class="section">
+    <div class="section-header"><span class="section-title">SECTOR / THEME</span></div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr>
+          <th style="text-align:left;">섹터/테마</th>
+          <th style="text-align:right;">평가금액</th>
+          <th style="text-align:right;">포트폴리오 비중</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
     </div>
   </div>`;
 }
