@@ -104,6 +104,16 @@
 
   .loading-overlay { position: fixed; inset: 0; background: rgba(8,12,16,0.7); display: none; align-items: center; justify-content: center; z-index: 999; font-family: var(--mono); color: var(--orange); font-size: 13px; letter-spacing: 1px; }
 
+  /* chart modal */
+  .chart-modal-bg { position:fixed;inset:0;background:rgba(0,0,0,0.8);display:none;align-items:center;justify-content:center;z-index:1001; }
+  .chart-modal { background:var(--surface);border:1px solid var(--border2);padding:20px;width:92%;max-width:720px;border-radius:4px; }
+  .chart-modal-hdr { display:flex;justify-content:space-between;align-items:center;margin-bottom:16px; }
+  .chart-modal-title { font-family:var(--mono);font-size:14px;color:var(--orange);letter-spacing:1px; }
+  .chart-period-btns { display:flex;gap:4px; }
+  .chart-period-btn { font-family:var(--mono);font-size:10px;padding:3px 10px;border:1px solid var(--border2);background:transparent;color:var(--muted);cursor:pointer; }
+  .chart-period-btn.on { background:var(--orange);color:#000;border-color:var(--orange); }
+  canvas { width:100%!important; }
+
   .mkt-toolbar { display: flex; gap: 8px; align-items: center; margin-bottom: 14px; flex-wrap: wrap; }
   .mkt-toolbar input { max-width: 520px; }
 
@@ -124,6 +134,26 @@
 <body>
 
 <div class="loading-overlay" id="loader">⟳ &nbsp;로딩 중...</div>
+
+<!-- Chart Modal -->
+<div class="chart-modal-bg" id="chart-modal-bg" onclick="closeChartModal(event)">
+  <div class="chart-modal">
+    <div class="chart-modal-hdr">
+      <span class="chart-modal-title" id="chart-modal-title">—</span>
+      <div style="display:flex;align-items:center;gap:12px;">
+        <div class="chart-period-btns" id="chart-period-btns">
+          <button class="chart-period-btn" onclick="setChartPeriod('5d')">5D</button>
+          <button class="chart-period-btn on" onclick="setChartPeriod('1mo')">1M</button>
+          <button class="chart-period-btn" onclick="setChartPeriod('3mo')">3M</button>
+          <button class="chart-period-btn" onclick="setChartPeriod('6mo')">6M</button>
+          <button class="chart-period-btn" onclick="setChartPeriod('1y')">1Y</button>
+        </div>
+        <button class="btn btn-ghost btn-sm" onclick="document.getElementById('chart-modal-bg').style.display='none'">✕</button>
+      </div>
+    </div>
+    <canvas id="chart-canvas" height="280"></canvas>
+  </div>
+</div>
 
 <!-- Gist sync modal -->
 <div class="modal-bg" id="sync-modal">
@@ -167,6 +197,146 @@
 
 <script>
 const PROXY = 'https://stock-proxy.yhyungs66.workers.dev/?url=';
+
+// ── Chart state ──
+let chartTicker = null;
+let chartPeriod = '1mo';
+let chartCanvas = null;
+
+function closeChartModal(e) {
+  if (e.target === document.getElementById('chart-modal-bg'))
+    document.getElementById('chart-modal-bg').style.display = 'none';
+}
+
+async function openChart(ticker, name) {
+  chartTicker = ticker;
+  chartPeriod = '1mo';
+  document.getElementById('chart-modal-bg').style.display = 'flex';
+  document.getElementById('chart-modal-title').textContent = ticker + (name ? '  ' + name : '');
+  document.querySelectorAll('.chart-period-btn').forEach(b => b.classList.toggle('on', b.textContent === '1M'));
+  await drawChart();
+}
+
+async function setChartPeriod(p) {
+  chartPeriod = p;
+  const labelMap = {'5d':'5D','1mo':'1M','3mo':'3M','6mo':'6M','1y':'1Y'};
+  document.querySelectorAll('.chart-period-btn').forEach(b => b.classList.toggle('on', b.textContent === labelMap[p]));
+  await drawChart();
+}
+
+async function drawChart() {
+  const canvas = document.getElementById('chart-canvas');
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = '#4a5a6a';
+  ctx.font = '12px IBM Plex Mono, monospace';
+  ctx.fillText('로딩 중...', 20, 40);
+
+  const intervalMap = {'5d':'1d','1mo':'1d','3mo':'1d','6mo':'1d','1y':'1wk'};
+  const interval = intervalMap[chartPeriod] || '1d';
+
+  try {
+    const d = await sf(`https://query1.finance.yahoo.com/v8/finance/chart/${chartTicker}?interval=${interval}&range=${chartPeriod}`);
+    const res = d?.chart?.result?.[0];
+    if (!res) { ctx.fillText('데이터 없음', 20, 40); return; }
+
+    const timestamps = res.timestamp || [];
+    const closes = res.indicators?.quote?.[0]?.close || [];
+    const currency = res.meta?.currency || 'USD';
+
+    // filter nulls
+    const pairs = timestamps.map((t,i) => ({t, c: closes[i]})).filter(p => p.c !== null && p.c !== undefined);
+    if (!pairs.length) return;
+
+    const W = canvas.offsetWidth || 680;
+    const H = 280;
+    canvas.width = W;
+    canvas.height = H;
+    const PAD = {top:20, right:20, bottom:40, left:70};
+    const cw = W - PAD.left - PAD.right;
+    const ch = H - PAD.top - PAD.bottom;
+
+    const minC = Math.min(...pairs.map(p=>p.c));
+    const maxC = Math.max(...pairs.map(p=>p.c));
+    const range = maxC - minC || 1;
+    const isUp = pairs[pairs.length-1].c >= pairs[0].c;
+    const lineColor = isUp ? '#00c97a' : '#ff3d3d';
+
+    ctx.clearRect(0, 0, W, H);
+
+    // grid
+    ctx.strokeStyle = '#1c2530';
+    ctx.lineWidth = 1;
+    for (let i=0; i<=4; i++) {
+      const y = PAD.top + (ch / 4) * i;
+      ctx.beginPath(); ctx.moveTo(PAD.left, y); ctx.lineTo(PAD.left+cw, y); ctx.stroke();
+      const val = maxC - (range/4)*i;
+      ctx.fillStyle = '#4a5a6a';
+      ctx.font = '10px IBM Plex Mono, monospace';
+      ctx.textAlign = 'right';
+      const label = currency==='KRW'
+        ? '₩'+val.toLocaleString('ko-KR',{maximumFractionDigits:0})
+        : '$'+val.toFixed(2);
+      ctx.fillText(label, PAD.left-6, y+4);
+    }
+
+    // fill area
+    ctx.beginPath();
+    pairs.forEach((p, i) => {
+      const x = PAD.left + (i/(pairs.length-1||1))*cw;
+      const y = PAD.top + ch - ((p.c-minC)/range)*ch;
+      i===0 ? ctx.moveTo(x,y) : ctx.lineTo(x,y);
+    });
+    const lastX = PAD.left + cw;
+    const firstX = PAD.left;
+    ctx.lineTo(lastX, PAD.top+ch);
+    ctx.lineTo(firstX, PAD.top+ch);
+    ctx.closePath();
+    const grad = ctx.createLinearGradient(0, PAD.top, 0, PAD.top+ch);
+    grad.addColorStop(0, isUp ? 'rgba(0,201,122,0.3)' : 'rgba(255,61,61,0.3)');
+    grad.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = grad;
+    ctx.fill();
+
+    // line
+    ctx.beginPath();
+    ctx.strokeStyle = lineColor;
+    ctx.lineWidth = 2;
+    pairs.forEach((p, i) => {
+      const x = PAD.left + (i/(pairs.length-1||1))*cw;
+      const y = PAD.top + ch - ((p.c-minC)/range)*ch;
+      i===0 ? ctx.moveTo(x,y) : ctx.lineTo(x,y);
+    });
+    ctx.stroke();
+
+    // date labels
+    ctx.fillStyle = '#4a5a6a';
+    ctx.font = '9px IBM Plex Mono, monospace';
+    ctx.textAlign = 'center';
+    const step = Math.max(1, Math.floor(pairs.length/5));
+    for (let i=0; i<pairs.length; i+=step) {
+      const x = PAD.left + (i/(pairs.length-1||1))*cw;
+      const d = new Date(pairs[i].t*1000);
+      ctx.fillText(`${d.getMonth()+1}/${d.getDate()}`, x, H-10);
+    }
+
+    // current price label
+    const lastY = PAD.top + ch - ((pairs[pairs.length-1].c-minC)/range)*ch;
+    const lastPrice = pairs[pairs.length-1].c;
+    const priceLabel = currency==='KRW'
+      ? '₩'+lastPrice.toLocaleString('ko-KR',{maximumFractionDigits:0})
+      : '$'+lastPrice.toFixed(2);
+    const chgPct = ((pairs[pairs.length-1].c/pairs[0].c-1)*100);
+    ctx.fillStyle = lineColor;
+    ctx.font = 'bold 12px IBM Plex Mono, monospace';
+    ctx.textAlign = 'left';
+    ctx.fillText(`${priceLabel}  ${chgPct>=0?'+':''}${chgPct.toFixed(2)}%`, PAD.left, PAD.top-4);
+
+  } catch(e) {
+    ctx.fillStyle = '#ff3d3d';
+    ctx.fillText('차트 로드 실패: '+e.message, 20, 40);
+  }
+}
 const LS_KEY = 'pf-monitor-v3';
 const LS_GIST = 'pf-gist-cfg';
 const GIST_FILE = 'portfolio-monitor.json';
@@ -201,6 +371,23 @@ function loadLocal() {
 function saveApp() {
   localStorage.setItem(LS_KEY, JSON.stringify(app));
   scheduleGistPush();
+}
+
+function saveSnapshot() {
+  const today = new Date().toISOString().slice(0,10);
+  if (!app.history) app.history = [];
+  // 오늘 스냅샷이 이미 있으면 덮어쓰기
+  const idx = app.history.findIndex(h => h.date === today);
+  const snap = { date: today };
+  app.portfolios.forEach(pf => {
+    const { total } = pfTotals(pf);
+    if (total > 0) snap[pf.id] = { name: pf.name, total };
+  });
+  if (idx >= 0) app.history[idx] = snap;
+  else app.history.push(snap);
+  // 최대 730일(2년) 보관
+  if (app.history.length > 730) app.history = app.history.slice(-730);
+  saveApp();
 }
 
 // ══════════ Gist sync ══════════
@@ -504,6 +691,7 @@ function renderNav() {
     html += `<div class="tab ${app.activeTab===pf.id?'active':''}" onclick="switchTab('${pf.id}')">
       ${esc(pf.name)}<span class="tab-x" onclick="event.stopPropagation();deletePortfolio('${pf.id}')">✕</span></div>`;
   });
+  html += `<div class="tab ${app.activeTab==='history'?'active':''}" onclick="switchTab('history')">📊 히스토리</div>`;
   html += `<div class="tab tab-add" onclick="addPortfolio()" title="포트폴리오 추가">＋</div>`;
   document.getElementById('nav').innerHTML = html;
 }
@@ -534,6 +722,7 @@ function renamePortfolio(id) {
 function renderMain() {
   const main = document.getElementById('main');
   if (app.activeTab==='market') { main.innerHTML = marketPageHTML(); return; }
+  if (app.activeTab==='history') { main.innerHTML = historyPageHTML(); setTimeout(drawHistoryChart, 50); return; }
   const pf = getPf(app.activeTab);
   if (!pf) { app.activeTab='market'; main.innerHTML = marketPageHTML(); return; }
   main.innerHTML = portfolioPageHTML(pf);
@@ -551,7 +740,7 @@ function marketPageHTML() {
   const rows = app.marketData.map(r=>{
     const hiPct = (r.hi52&&r.price)?(r.price/r.hi52-1)*100:null;
     return `<tr>
-      <td>
+      <td style="cursor:pointer;" onclick="openChart('${r.ticker}','${(r.name||'').replace(/'/g,'')}')">
         <span class="ticker-name">${r.ticker}</span>
         ${r.name && r.name!==r.ticker ? `<span class="sub-amt">${r.name}</span>` : ''}
       </td>
@@ -672,7 +861,7 @@ function portfolioPageHTML(pf) {
       : '<span class="neu">—</span>';
 
     return `<tr>
-      <td>
+      <td style="cursor:pointer;" onclick="openChart('${esc(h.ticker)}','${(h.name||'').replace(/'/g,'')}')">
         <span class="ticker-name">${esc(h.ticker)}</span>
         ${h.name ? `<span class="sub-amt">${esc(h.name)}</span>` : ''}
         <br>
@@ -823,6 +1012,143 @@ function portfolioPageHTML(pf) {
 
   ${sectorHTML(pf, total)}
   `;
+}
+
+function historyPageHTML() {
+  const history = app.history || [];
+  const pfList = app.portfolios;
+
+  if (history.length < 2) {
+    return `<div style="padding:40px;text-align:center;color:var(--muted);font-family:var(--mono);">
+      히스토리 데이터가 부족합니다.<br>
+      <span style="font-size:11px;">매일 페이지에 접속하면 자동으로 누적됩니다.</span>
+    </div>`;
+  }
+
+  return `
+  <div class="section">
+    <div class="section-header">
+      <span class="section-title">PORTFOLIO VALUE HISTORY</span>
+      <button class="btn btn-ghost btn-sm" onclick="saveSnapshot();render();">📌 오늘 스냅샷 저장</button>
+    </div>
+    <canvas id="history-canvas" height="320" style="width:100%;"></canvas>
+  </div>
+
+  <div class="section">
+    <div class="section-header"><span class="section-title">DAILY RECORDS</span></div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr>
+          <th style="text-align:left;">날짜</th>
+          ${pfList.map(pf=>`<th style="text-align:right;">${esc(pf.name)}</th>`).join('')}
+          <th style="text-align:right;">합계</th>
+        </tr></thead>
+        <tbody>
+          ${[...history].reverse().map(snap => {
+            const rowTotal = pfList.reduce((s,pf) => s + (snap[pf.id]?.total||0), 0);
+            return `<tr>
+              <td style="color:var(--muted);font-family:var(--mono);font-size:11px;padding:7px 12px;border-bottom:1px solid var(--border);">${snap.date}</td>
+              ${pfList.map(pf => `<td style="text-align:right;padding:7px 12px;border-bottom:1px solid var(--border);font-family:var(--mono);font-size:12px;color:var(--text);">${snap[pf.id]?.total ? dispMoney(snap[pf.id].total) : '—'}</td>`).join('')}
+              <td style="text-align:right;padding:7px 12px;border-bottom:1px solid var(--border);font-family:var(--mono);font-size:12px;color:var(--yellow);">${dispMoney(rowTotal)}</td>
+            </tr>`;
+          }).join('')}
+        </tbody>
+      </table>
+    </div>
+  </div>`;
+}
+
+function drawHistoryChart() {
+  const canvas = document.getElementById('history-canvas');
+  if (!canvas) return;
+  const history = app.history || [];
+  if (history.length < 2) return;
+
+  const W = canvas.offsetWidth || 900;
+  const H = 320;
+  canvas.width = W;
+  canvas.height = H;
+  const ctx = canvas.getContext('2d');
+  const PAD = {top:30, right:20, bottom:50, left:80};
+  const cw = W - PAD.left - PAD.right;
+  const ch = H - PAD.top - PAD.bottom;
+
+  const pfList = app.portfolios;
+  const colors = ['#4a9eff','#00c97a','#f5c542','#ff6b00','#ff3d3d','#a78bfa'];
+
+  // 합계 데이터
+  const totals = history.map(snap => pfList.reduce((s,pf)=>s+(snap[pf.id]?.total||0),0));
+  const minV = Math.min(...totals.filter(v=>v>0)) * 0.95;
+  const maxV = Math.max(...totals) * 1.05;
+  const range = maxV - minV || 1;
+
+  // grid
+  ctx.strokeStyle = '#1c2530';
+  ctx.lineWidth = 1;
+  for (let i=0; i<=4; i++) {
+    const y = PAD.top + (ch/4)*i;
+    ctx.beginPath(); ctx.moveTo(PAD.left,y); ctx.lineTo(PAD.left+cw,y); ctx.stroke();
+    const val = maxV - (range/4)*i;
+    ctx.fillStyle = '#4a5a6a';
+    ctx.font = '10px IBM Plex Mono, monospace';
+    ctx.textAlign = 'right';
+    ctx.fillText(dispMoney(val), PAD.left-6, y+4);
+  }
+
+  // 각 포트폴리오 라인
+  pfList.forEach((pf, pi) => {
+    const vals = history.map(snap => snap[pf.id]?.total || null);
+    ctx.beginPath();
+    ctx.strokeStyle = colors[pi % colors.length];
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([4,3]);
+    let started = false;
+    vals.forEach((v,i) => {
+      if (!v) return;
+      const x = PAD.left + (i/(history.length-1||1))*cw;
+      const y = PAD.top + ch - ((v-minV)/range)*ch;
+      if (!started) { ctx.moveTo(x,y); started=true; } else ctx.lineTo(x,y);
+    });
+    ctx.stroke();
+  });
+  ctx.setLineDash([]);
+
+  // 합계 라인 (굵게)
+  ctx.beginPath();
+  ctx.strokeStyle = '#ffffff';
+  ctx.lineWidth = 2.5;
+  totals.forEach((v,i) => {
+    if (!v) return;
+    const x = PAD.left + (i/(history.length-1||1))*cw;
+    const y = PAD.top + ch - ((v-minV)/range)*ch;
+    i===0 ? ctx.moveTo(x,y) : ctx.lineTo(x,y);
+  });
+  ctx.stroke();
+
+  // 날짜 라벨
+  ctx.fillStyle = '#4a5a6a';
+  ctx.font = '9px IBM Plex Mono, monospace';
+  ctx.textAlign = 'center';
+  const step = Math.max(1, Math.floor(history.length/6));
+  history.forEach((snap,i) => {
+    if (i % step !== 0) return;
+    const x = PAD.left + (i/(history.length-1||1))*cw;
+    ctx.fillText(snap.date.slice(5), x, H-8);
+  });
+
+  // 범례
+  ctx.textAlign = 'left';
+  pfList.forEach((pf,pi) => {
+    ctx.fillStyle = colors[pi%colors.length];
+    ctx.fillRect(PAD.left + pi*120, 6, 20, 3);
+    ctx.fillStyle = '#4a5a6a';
+    ctx.font = '9px IBM Plex Mono, monospace';
+    ctx.fillText(pf.name, PAD.left + pi*120 + 24, 11);
+  });
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(PAD.left + pfList.length*120, 6, 20, 3);
+  ctx.fillStyle = '#ccc';
+  ctx.fillText('합계', PAD.left + pfList.length*120 + 24, 11);
 }
 
 function sectorHTML(pf, total) {
