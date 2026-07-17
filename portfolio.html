@@ -1078,8 +1078,16 @@ function drawHistoryChart() {
 
   // 합계 데이터
   const totals = history.map(snap => pfList.reduce((s,pf)=>s+(snap[pf.id]?.total||0),0));
-  const minV = Math.min(...totals.filter(v=>v>0)) * 0.95;
-  const maxV = Math.max(...totals) * 1.05;
+
+  // 개별 포트폴리오 값도 포함해서 min/max 계산
+  const allVals = [];
+  history.forEach(snap => {
+    pfList.forEach(pf => { if(snap[pf.id]?.total) allVals.push(snap[pf.id].total); });
+    const t = pfList.reduce((s,pf)=>s+(snap[pf.id]?.total||0),0);
+    if(t>0) allVals.push(t);
+  });
+  const minV = Math.min(...allVals) * 0.95;
+  const maxV = Math.max(...allVals) * 1.05;
   const range = maxV - minV || 1;
 
   // grid
